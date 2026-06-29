@@ -11,6 +11,8 @@ class MessagePublisher(context: Context) {
 
     fun show(topic: String, payload: String, sound: Boolean) {
         val id = (topic + System.nanoTime().toString()).hashCode().absoluteValue
-        manager.notify(id, helper.messageNotification(topic, payload, sound))
+        runCatching {
+            manager.notify(id, helper.messageNotification(topic, payload, sound))
+        }
     }
 }
