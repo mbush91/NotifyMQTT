@@ -6,7 +6,7 @@ The project is intentionally built outside of the Play Store flow. GitHub Action
 
 ## Features
 
-- Configure broker host, port, TLS, username, password, client ID, and subscribed topics.
+- Configure broker host, port, TLS, credentials, client ID, and subscribed topics.
 - Subscribe to multiple MQTT topics, one topic per line.
 - Run a foreground MQTT listener service for reliable modern Android background execution.
 - Post a phone notification for every incoming MQTT message.
@@ -43,31 +43,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-You can also run the **Release APK** workflow manually.
-
-### Optional signing setup
-
-For stable side-load updates, configure these repository secrets:
-
-- `ANDROID_KEYSTORE_BASE64` — base64 of your `.jks` / `.keystore`
-- `ANDROID_KEYSTORE_PASSWORD`
-- `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
-
-When those secrets exist, the workflow builds a signed release APK. Without them, it publishes a debug APK artifact instead so the project is still usable with zero secret setup.
-
-Create a local keystore with:
-
-```bash
-keytool -genkeypair \
-  -v \
-  -keystore notifymqtt-release.jks \
-  -alias notifymqtt \
-  -keyalg RSA \
-  -keysize 4096 \
-  -validity 10000
-base64 -w 0 notifymqtt-release.jks
-```
+You can also run the **Release APK** workflow manually. The current workflow publishes an installable debug APK, which keeps the project usable with no repository secret setup.
 
 ## MQTT topic examples
 
