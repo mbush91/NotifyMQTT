@@ -11,8 +11,10 @@ class MessagePublisher(context: Context) {
 
     fun show(topic: String, payload: String, sound: Boolean) {
         val id = (topic + System.nanoTime().toString()).hashCode().absoluteValue
-        runCatching {
+        try {
             manager.notify(id, helper.messageNotification(topic, payload, sound))
+        } catch (_: SecurityException) {
+            // User has not granted notification permission yet.
         }
     }
 }
