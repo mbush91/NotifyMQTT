@@ -1,0 +1,79 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: Version name, for example 0.1.0
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: Build and publish APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version_name }}" ]]; then
+            VERSION_NAME="${{ github.event.inputs.version_name }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+          else
+            VERSION_NAME="0.1.${GITHUB_RUN_NUMBER}"
+          fi
+          VERSION_CODE="${GITHUB_RUN_NUMBER}"
+          echo "VERSION_NAME=${VERSION_NAME}" >> "${GITHUB_ENV}"
+          echo "VERSION_CODE=${VERSION_CODE}" >> "${GITHUB_ENV}"
+          echo "version_name=${VERSION_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build debug APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk "dist/NotifyMQTT-${VERSION_NAME}-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotifyMQTT-${{ steps.version.outputs.version_name }}-apk
+          path: dist/*.apk
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true

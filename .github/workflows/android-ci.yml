@@ -1,0 +1,81 @@
+name: Android CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Unit tests
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          set +e
+          gradle --no-daemon --stacktrace --info :app:testDebugUnitTest 2>&1 | tee ci-logs/unit-tests.log
+          status=${PIPESTATUS[0]}
+          {
+            echo "## Unit test output tail"
+            echo '```text'
+            tail -n 160 ci-logs/unit-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          set +e
+          gradle --no-daemon --stacktrace --info :app:assembleDebug 2>&1 | tee ci-logs/assemble-debug.log
+          status=${PIPESTATUS[0]}
+          {
+            echo "## Assemble output tail"
+            echo '```text'
+            tail -n 160 ci-logs/assemble-debug.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload CI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotifyMQTT-ci-logs
+          path: ci-logs/*.log
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotifyMQTT-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
