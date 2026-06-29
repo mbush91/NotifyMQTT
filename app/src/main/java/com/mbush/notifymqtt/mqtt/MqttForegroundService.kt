@@ -162,10 +162,10 @@ class MqttForegroundService : Service() {
             keepAliveInterval = KEEP_ALIVE_SECONDS
 
             if (settings.username.isNotBlank()) {
-                userName = settings.username
+                setUserName(settings.username)
             }
             if (settings.password.isNotBlank()) {
-                password = settings.password.toCharArray()
+                setPassword(settings.password.toCharArray())
             }
             if (settings.useTls) {
                 socketFactory = SSLSocketFactory.getDefault()
