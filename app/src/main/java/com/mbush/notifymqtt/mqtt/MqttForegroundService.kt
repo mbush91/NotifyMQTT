@@ -168,7 +168,7 @@ class MqttForegroundService : Service() {
                 setPassword(settings.password.toCharArray())
             }
             if (settings.useTls) {
-                socketFactory = SSLSocketFactory.getDefault()
+                setSocketFactory(SSLSocketFactory.getDefault())
             }
         }
 
