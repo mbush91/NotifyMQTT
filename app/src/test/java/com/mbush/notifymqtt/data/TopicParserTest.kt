@@ -44,6 +44,7 @@ class TopicParserTest {
             alerts/critical | ding
             alerts/info | silent
             telemetry/# | log
+            sensors/heartbeat | missing:15
         """.trimIndent()
 
         assertEquals(
@@ -51,9 +52,28 @@ class TopicParserTest {
                 SubscriptionRule("alerts/critical", SubscriptionBehavior.DING),
                 SubscriptionRule("alerts/info", SubscriptionBehavior.SILENT),
                 SubscriptionRule("telemetry/#", SubscriptionBehavior.LOG_ONLY),
+                SubscriptionRule("sensors/heartbeat", SubscriptionBehavior.MISSING, timeoutMinutes = 15),
             ),
             TopicParser.parse(raw),
         )
+    }
+
+    @Test
+    fun missingBehaviorAliasesAreSupported() {
+        assertEquals(
+            SubscriptionRule("a", SubscriptionBehavior.MISSING, timeoutMinutes = 5),
+            TopicParser.parse("a | stale:5").single(),
+        )
+        assertEquals(
+            SubscriptionRule("b", SubscriptionBehavior.MISSING, timeoutMinutes = 10),
+            TopicParser.parse("b | watch:10").single(),
+        )
+    }
+
+    @Test
+    fun invalidMissingTimeoutsAreIgnored() {
+        assertTrue(TopicParser.parse("a | missing:0").isEmpty())
+        assertTrue(TopicParser.parse("a | missing:nope").isEmpty())
     }
 
     @Test
