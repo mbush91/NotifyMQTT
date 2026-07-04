@@ -4,22 +4,14 @@ enum class SubscriptionBehavior(val token: String) {
     DING("ding"),
     SILENT("silent"),
     LOG_ONLY("log"),
+    MISSING("missing"),
     ;
-
-    companion object {
-        fun fromToken(raw: String): SubscriptionBehavior? =
-            when (raw.trim().lowercase()) {
-                "ding", "audible", "notify", "sound" -> DING
-                "silent", "quiet" -> SILENT
-                "log", "log-only", "log_only" -> LOG_ONLY
-                else -> null
-            }
-    }
 }
 
 data class SubscriptionRule(
     val topicFilter: String,
     val behavior: SubscriptionBehavior,
+    val timeoutMinutes: Int? = null,
 )
 
 object TopicParser {
@@ -70,12 +62,35 @@ object TopicParser {
         val topicFilter = parts[0].trim()
         if (topicFilter.isBlank()) return null
 
-        val behavior = if (parts.size == 1) {
-            defaultBehavior
-        } else {
-            SubscriptionBehavior.fromToken(parts[1]) ?: return null
+        if (parts.size == 1) {
+            return SubscriptionRule(topicFilter, defaultBehavior)
         }
 
-        return SubscriptionRule(topicFilter, behavior)
+        val action = parts[1].trim().lowercase()
+        return when {
+            action in setOf("ding", "audible", "notify", "sound") ->
+                SubscriptionRule(topicFilter, SubscriptionBehavior.DING)
+
+            action in setOf("silent", "quiet") ->
+                SubscriptionRule(topicFilter, SubscriptionBehavior.SILENT)
+
+            action in setOf("log", "log-only", "log_only") ->
+                SubscriptionRule(topicFilter, SubscriptionBehavior.LOG_ONLY)
+
+            action.startsWith("missing:") || action.startsWith("stale:") || action.startsWith("watch:") -> {
+                val minutes = action.substringAfter(':').trim().toIntOrNull()
+                if (minutes == null || minutes <= 0) {
+                    null
+                } else {
+                    SubscriptionRule(
+                        topicFilter = topicFilter,
+                        behavior = SubscriptionBehavior.MISSING,
+                        timeoutMinutes = minutes,
+                    )
+                }
+            }
+
+            else -> null
+        }
     }
 }
