@@ -11,6 +11,7 @@ The project is intentionally built outside of the Play Store flow. GitHub Action
 - Route each matching subscription to one of three behaviors: audible notification, silent notification, or log only.
 - Keep the existing audible and silent Android notification channels.
 - Log-only messages write to Android Logcat and to a rotating app-private log file without posting a notification.
+- View recent log-only messages in the app, refresh the view, or clear the stored logs.
 - Run a foreground MQTT listener service for reliable modern Android background execution.
 - Optional start-on-boot toggle.
 - Open-source Kotlin + Jetpack Compose Android project.
@@ -55,7 +56,7 @@ mqtt-messages.log
 mqtt-messages.log.1
 ```
 
-The active log rotates at approximately 1 MiB.
+The active log rotates at approximately 1 MiB. The app's **Log-only messages** section opens a viewer showing the 100 most recent stored entries, newest first, with Refresh and Clear actions.
 
 ## Local development
 
