@@ -164,7 +164,7 @@ class MqttForegroundService : Service() {
                     SubscriptionBehavior.DING -> publisher.show(topic, payload, sound = true)
                     SubscriptionBehavior.SILENT -> publisher.show(topic, payload, sound = false)
                     SubscriptionBehavior.LOG_ONLY -> messageLogger.log(topic, payload)
-                    SubscriptionBehavior.MISSING -> Unit
+                    SubscriptionBehavior.MISSING -> messageLogger.log(topic, payload)
                     null -> messageLogger.log(topic, payload)
                 }
             }
@@ -206,9 +206,11 @@ class MqttForegroundService : Service() {
                 delay(FRESHNESS_CHECK_INTERVAL_MS)
                 tracker.collectNewlyExpired().forEach { rule ->
                     val minutes = requireNotNull(rule.timeoutMinutes)
+                    val timeoutMessage = "No matching MQTT message received for $minutes minute(s)."
+                    messageLogger.log(rule.topicFilter, "TIMEOUT: $timeoutMessage")
                     publisher.show(
                         topic = rule.topicFilter,
-                        payload = "No matching MQTT message received for $minutes minute(s).",
+                        payload = timeoutMessage,
                         sound = true,
                     )
                 }
