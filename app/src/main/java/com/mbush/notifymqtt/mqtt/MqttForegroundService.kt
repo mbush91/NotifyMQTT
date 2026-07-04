@@ -7,6 +7,8 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import com.mbush.notifymqtt.data.AppSettings
 import com.mbush.notifymqtt.data.SettingsRepository
+import com.mbush.notifymqtt.data.SubscriptionBehavior
+import com.mbush.notifymqtt.data.TopicParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,8 +34,10 @@ class MqttForegroundService : Service() {
     private lateinit var repository: SettingsRepository
     private lateinit var notificationHelper: NotificationHelper
     private lateinit var publisher: MessagePublisher
+    private lateinit var messageLogger: MessageLogger
 
     private var settingsCollectorJob: Job? = null
+    private var freshnessWatchJob: Job? = null
     private var mqttClient: MqttAsyncClient? = null
 
     override fun onCreate() {
@@ -41,6 +45,7 @@ class MqttForegroundService : Service() {
         repository = SettingsRepository(applicationContext)
         notificationHelper = NotificationHelper(applicationContext)
         publisher = MessagePublisher(applicationContext)
+        messageLogger = MessageLogger(applicationContext)
         notificationHelper.createChannels()
     }
 
@@ -71,6 +76,7 @@ class MqttForegroundService : Service() {
 
     override fun onDestroy() {
         settingsCollectorJob?.cancel()
+        freshnessWatchJob?.cancel()
         scope.launch { disconnectClient() }
         scope.cancel()
         super.onDestroy()
@@ -104,7 +110,7 @@ class MqttForegroundService : Service() {
                 connectAndSubscribe(settings)
                 startAsForeground(
                     "NotifyMQTT connected",
-                    "Listening to ${settings.parsedTopics.size} topic(s) on ${settings.host}:${settings.port}",
+                    "Listening to ${settings.subscriptions.size} subscription(s) on ${settings.host}:${settings.port}",
                 )
                 awaitCancellation()
             } catch (cancellation: CancellationException) {
@@ -124,6 +130,9 @@ class MqttForegroundService : Service() {
     private suspend fun connectAndSubscribe(settings: AppSettings) = withContext(Dispatchers.IO) {
         disconnectClient()
 
+        val subscriptions = settings.subscriptions
+        val topics = subscriptions.map { it.topicFilter }
+        val freshnessTracker = FreshnessTracker(subscriptions)
         val clientId = settings.clientId.ifBlank { "NotifyMQTT-${System.currentTimeMillis()}" }
         val client = MqttAsyncClient(settings.brokerUri, clientId, MemoryPersistence())
         mqttClient = client
@@ -131,7 +140,7 @@ class MqttForegroundService : Service() {
         client.setCallback(object : MqttCallbackExtended {
             override fun connectComplete(reconnect: Boolean, serverURI: String?) {
                 scope.launch {
-                    subscribeToTopics(client, settings.parsedTopics)
+                    subscribeToTopics(client, topics)
                     val status = if (reconnect) "reconnected" else "connected"
                     startAsForeground(
                         "NotifyMQTT $status",
@@ -149,7 +158,15 @@ class MqttForegroundService : Service() {
 
             override fun messageArrived(topic: String, message: MqttMessage) {
                 val payload = String(message.payload, Charsets.UTF_8)
-                publisher.show(topic, payload, settings.dingEnabled)
+                freshnessTracker.recordMessage(topic)
+
+                when (TopicParser.behaviorFor(topic, subscriptions)) {
+                    SubscriptionBehavior.DING -> publisher.show(topic, payload, sound = true)
+                    SubscriptionBehavior.SILENT -> publisher.show(topic, payload, sound = false)
+                    SubscriptionBehavior.LOG_ONLY -> messageLogger.log(topic, payload)
+                    SubscriptionBehavior.MISSING -> messageLogger.log(topic, payload)
+                    null -> messageLogger.log(topic, payload)
+                }
             }
 
             override fun deliveryComplete(token: IMqttDeliveryToken?) = Unit
@@ -173,7 +190,32 @@ class MqttForegroundService : Service() {
         }
 
         client.connect(options).waitForCompletion(CONNECT_WAIT_MS)
-        subscribeToTopics(client, settings.parsedTopics)
+        subscribeToTopics(client, topics)
+        startFreshnessWatcher(freshnessTracker)
+    }
+
+    private fun startFreshnessWatcher(tracker: FreshnessTracker) {
+        freshnessWatchJob?.cancel()
+        if (!tracker.hasWatchedRules) {
+            freshnessWatchJob = null
+            return
+        }
+
+        freshnessWatchJob = scope.launch {
+            while (true) {
+                delay(FRESHNESS_CHECK_INTERVAL_MS)
+                tracker.collectNewlyExpired().forEach { rule ->
+                    val minutes = requireNotNull(rule.timeoutMinutes)
+                    val timeoutMessage = "No matching MQTT message received for $minutes minute(s)."
+                    messageLogger.log(rule.topicFilter, "TIMEOUT: $timeoutMessage")
+                    publisher.show(
+                        topic = rule.topicFilter,
+                        payload = timeoutMessage,
+                        sound = true,
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun subscribeToTopics(client: MqttAsyncClient, topics: List<String>) = withContext(Dispatchers.IO) {
@@ -187,6 +229,9 @@ class MqttForegroundService : Service() {
     }
 
     private suspend fun disconnectClient() = withContext(Dispatchers.IO) {
+        freshnessWatchJob?.cancel()
+        freshnessWatchJob = null
+
         val client = mqttClient ?: return@withContext
         mqttClient = null
         runCatching {
@@ -220,5 +265,6 @@ class MqttForegroundService : Service() {
         private const val SUBSCRIBE_WAIT_MS = 10_000L
         private const val DISCONNECT_WAIT_MS = 5_000L
         private const val RETRY_DELAY_MS = 5_000L
+        private const val FRESHNESS_CHECK_INTERVAL_MS = 15_000L
     }
 }

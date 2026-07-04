@@ -1,6 +1,7 @@
 package com.mbush.notifymqtt.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,12 +13,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,11 +29,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -38,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -45,9 +52,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mbush.notifymqtt.data.AppSettings
 import com.mbush.notifymqtt.data.SettingsRepository
+import com.mbush.notifymqtt.mqtt.LoggedMessage
+import com.mbush.notifymqtt.mqtt.MessageLogger
 import com.mbush.notifymqtt.mqtt.MqttForegroundService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun NotifyMqttApp(settingsRepository: SettingsRepository) {
@@ -83,6 +94,7 @@ private fun NotifyMqttScreen(
     var password by rememberSaveable { mutableStateOf(settings.password) }
     var clientId by rememberSaveable { mutableStateOf(settings.clientId) }
     var topics by rememberSaveable { mutableStateOf(settings.topics) }
+    var showLogs by rememberSaveable { mutableStateOf(false) }
 
     val editedSettings = settings.copy(
         host = host,
@@ -192,12 +204,23 @@ private fun NotifyMqttScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Subscriptions", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Use one line per subscription: topic | ding, topic | silent, or topic | log. " +
+                            "Plain topic lines use the default below. First matching rule wins.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     OutlinedTextField(
                         value = topics,
                         onValueChange = { topics = it },
-                        label = { Text("Topics, one per line") },
-                        placeholder = { Text("home/garage/door\nhome/hot-tub/alerts") },
-                        minLines = 4,
+                        label = { Text("Subscription rules, one per line") },
+                        placeholder = {
+                            Text(
+                                "home/garage/door | ding\n" +
+                                    "home/hot-tub/alerts | silent\n" +
+                                    "zigbee2mqtt/+/availability | log",
+                            )
+                        },
+                        minLines = 5,
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged { focusState ->
@@ -206,11 +229,31 @@ private fun NotifyMqttScreen(
                                 }
                             },
                     )
-                    ToggleRow("Ding on message", settings.dingEnabled) {
+                    Text(
+                        "${editedSettings.subscriptions.size} valid subscription(s)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    ToggleRow("Ding for plain topic lines", settings.dingEnabled) {
                         scope.launch { settingsRepository.updateDingEnabled(it) }
                     }
                     ToggleRow("Start after reboot", settings.autoStartOnBoot) {
                         scope.launch { settingsRepository.updateAutoStartOnBoot(it) }
+                    }
+                }
+            }
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Log-only messages", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "View messages received by subscriptions configured with | log.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(
+                        onClick = { showLogs = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("View logs")
                     }
                 }
             }
@@ -263,6 +306,89 @@ private fun NotifyMqttScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showLogs) {
+        MessageLogDialog(
+            context = context,
+            onDismiss = { showLogs = false },
+        )
+    }
+}
+
+@Composable
+private fun MessageLogDialog(
+    context: Context,
+    onDismiss: () -> Unit,
+) {
+    val logger = remember(context.applicationContext) { MessageLogger(context.applicationContext) }
+    val scope = rememberCoroutineScope()
+    var entries by remember { mutableStateOf<List<LoggedMessage>>(emptyList()) }
+
+    suspend fun refresh() {
+        entries = withContext(Dispatchers.IO) { logger.readRecent(100) }
+    }
+
+    LaunchedEffect(Unit) {
+        refresh()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Log-only messages") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (entries.isEmpty()) {
+                    Text("No log-only messages yet.")
+                } else {
+                    entries.forEach { entry ->
+                        LoggedMessageView(entry)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    onClick = {
+                        scope.launch { refresh() }
+                    },
+                ) {
+                    Text("Refresh")
+                }
+                TextButton(
+                    enabled = entries.isNotEmpty(),
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { logger.clear() }
+                            refresh()
+                        }
+                    },
+                ) {
+                    Text("Clear")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun LoggedMessageView(entry: LoggedMessage) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(entry.topic, fontWeight = FontWeight.SemiBold)
+        Text(entry.timestamp, style = MaterialTheme.typography.labelSmall)
+        Text(entry.payload, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
