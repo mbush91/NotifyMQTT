@@ -37,6 +37,7 @@ class MqttForegroundService : Service() {
     private lateinit var messageLogger: MessageLogger
 
     private var settingsCollectorJob: Job? = null
+    private var freshnessWatchJob: Job? = null
     private var mqttClient: MqttAsyncClient? = null
 
     override fun onCreate() {
@@ -75,6 +76,7 @@ class MqttForegroundService : Service() {
 
     override fun onDestroy() {
         settingsCollectorJob?.cancel()
+        freshnessWatchJob?.cancel()
         scope.launch { disconnectClient() }
         scope.cancel()
         super.onDestroy()
@@ -130,6 +132,7 @@ class MqttForegroundService : Service() {
 
         val subscriptions = settings.subscriptions
         val topics = subscriptions.map { it.topicFilter }
+        val freshnessTracker = FreshnessTracker(subscriptions)
         val clientId = settings.clientId.ifBlank { "NotifyMQTT-${System.currentTimeMillis()}" }
         val client = MqttAsyncClient(settings.brokerUri, clientId, MemoryPersistence())
         mqttClient = client
@@ -155,10 +158,13 @@ class MqttForegroundService : Service() {
 
             override fun messageArrived(topic: String, message: MqttMessage) {
                 val payload = String(message.payload, Charsets.UTF_8)
+                freshnessTracker.recordMessage(topic)
+
                 when (TopicParser.behaviorFor(topic, subscriptions)) {
                     SubscriptionBehavior.DING -> publisher.show(topic, payload, sound = true)
                     SubscriptionBehavior.SILENT -> publisher.show(topic, payload, sound = false)
                     SubscriptionBehavior.LOG_ONLY -> messageLogger.log(topic, payload)
+                    SubscriptionBehavior.MISSING -> Unit
                     null -> messageLogger.log(topic, payload)
                 }
             }
@@ -185,6 +191,29 @@ class MqttForegroundService : Service() {
 
         client.connect(options).waitForCompletion(CONNECT_WAIT_MS)
         subscribeToTopics(client, topics)
+        startFreshnessWatcher(freshnessTracker)
+    }
+
+    private fun startFreshnessWatcher(tracker: FreshnessTracker) {
+        freshnessWatchJob?.cancel()
+        if (!tracker.hasWatchedRules) {
+            freshnessWatchJob = null
+            return
+        }
+
+        freshnessWatchJob = scope.launch {
+            while (true) {
+                delay(FRESHNESS_CHECK_INTERVAL_MS)
+                tracker.collectNewlyExpired().forEach { rule ->
+                    val minutes = requireNotNull(rule.timeoutMinutes)
+                    publisher.show(
+                        topic = rule.topicFilter,
+                        payload = "No matching MQTT message received for $minutes minute(s).",
+                        sound = true,
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun subscribeToTopics(client: MqttAsyncClient, topics: List<String>) = withContext(Dispatchers.IO) {
@@ -198,6 +227,9 @@ class MqttForegroundService : Service() {
     }
 
     private suspend fun disconnectClient() = withContext(Dispatchers.IO) {
+        freshnessWatchJob?.cancel()
+        freshnessWatchJob = null
+
         val client = mqttClient ?: return@withContext
         mqttClient = null
         runCatching {
@@ -231,5 +263,6 @@ class MqttForegroundService : Service() {
         private const val SUBSCRIBE_WAIT_MS = 10_000L
         private const val DISCONNECT_WAIT_MS = 5_000L
         private const val RETRY_DELAY_MS = 5_000L
+        private const val FRESHNESS_CHECK_INTERVAL_MS = 15_000L
     }
 }
