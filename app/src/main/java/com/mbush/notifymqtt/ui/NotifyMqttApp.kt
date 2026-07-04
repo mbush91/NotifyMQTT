@@ -192,12 +192,23 @@ private fun NotifyMqttScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Subscriptions", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Use one line per subscription: topic | ding, topic | silent, or topic | log. " +
+                            "Plain topic lines use the default below. First matching rule wins.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     OutlinedTextField(
                         value = topics,
                         onValueChange = { topics = it },
-                        label = { Text("Topics, one per line") },
-                        placeholder = { Text("home/garage/door\nhome/hot-tub/alerts") },
-                        minLines = 4,
+                        label = { Text("Subscription rules, one per line") },
+                        placeholder = {
+                            Text(
+                                "home/garage/door | ding\n" +
+                                    "home/hot-tub/alerts | silent\n" +
+                                    "zigbee2mqtt/+/availability | log",
+                            )
+                        },
+                        minLines = 5,
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged { focusState ->
@@ -206,7 +217,11 @@ private fun NotifyMqttScreen(
                                 }
                             },
                     )
-                    ToggleRow("Ding on message", settings.dingEnabled) {
+                    Text(
+                        "${editedSettings.subscriptions.size} valid subscription(s)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    ToggleRow("Ding for plain topic lines", settings.dingEnabled) {
                         scope.launch { settingsRepository.updateDingEnabled(it) }
                     }
                     ToggleRow("Start after reboot", settings.autoStartOnBoot) {
